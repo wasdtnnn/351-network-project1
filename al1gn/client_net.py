@@ -58,7 +58,7 @@ def send_raw(sock: socket.socket, message: str) -> None:
     """Encode *message* with CRLF and send it.  Logs on failure."""
     try:
         sock.sendall((message + '\r\n').encode('utf-8'))
-        _log(f"[SEND → SERVER] {message}")
+        _log(f"[SEND -> SERVER] {message}")
     except Exception as exc:
         _log(f"[ERROR] Failed to send '{message}': {exc}")
         set_alive(False)

@@ -396,7 +396,7 @@ class AL1GNServer:
         arg  = parts[1].strip() if len(parts) > 1 else ''
         arg2 = parts[2].strip() if len(parts) > 2 else ''
 
-        _log(f"[RECV ← {session.name or session.addr}] {line.strip()}")
+        _log(f"[RECV <- {session.name or session.addr}] {line.strip()}")
 
         # ------------------------------------------------------------------
         # Commands valid in any state

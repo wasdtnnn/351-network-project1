@@ -169,20 +169,15 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
 
     elif code == '201':
         state = 'Registered'
-        # phrase is 'Session' here; data1 is 'created'/'restored'; data2 is token/board
-        full_tail = ' '.join(parts[1:])   # e.g. "Session created <token>"
-        tail_parts = full_tail.split(' ', 2)  # ['Session', 'created'/'restored', payload]
-        action  = tail_parts[1].lower() if len(tail_parts) > 1 else ''
-        payload = tail_parts[2] if len(tail_parts) > 2 else ''
-
-        if action == 'restored' and payload:
-            # payload is the board_state
-            last_board_enc = payload
+        # phrase is 'Session_created' or 'Session_restored'; data1 is token or board_state
+        if phrase == 'Session_restored' and data1:
+            # data1 is the board_state
+            last_board_enc = data1
             _log("[INFO] Session restored! Resuming your game:")
-            _log(render_board(payload))
+            _log(render_board(data1))
         else:
-            # payload is the session token
-            my_token = payload
+            # data1 is the session token
+            my_token = data1
             _log(f"[INFO] Registered! Your session token: {my_token}")
             _log("[INFO] Keep this token — you will need it to reconnect as the same player.")
             _log("[INFO] Start a game:")
@@ -204,7 +199,7 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
     # Matchmaking
     # ------------------------------------------------------------------
     elif code == '202':
-        # "202 Room created <code>"
+        # "202 Room_created <code>"
         room_code = data1
         _log(f"[INFO] Room created — share this code: {room_code}")
         _log("[INFO] Waiting for opponent to join…")
@@ -219,19 +214,16 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
         _log("[INFO] Waiting for an opponent…")
 
     # ------------------------------------------------------------------
-    # 301 Game turn <active_player_name> <board_state>
+    # 301 Game_turn <active_player_name> <board_state>
     #
     # Both players receive the same message.  The client compares
     # <active_player_name> to its own registered name (my_name) to
     # determine whether it is their turn or the opponent's.
     # ------------------------------------------------------------------
     elif code == '301':
-        # parts: ['301', 'Game', 'turn', '<active_player_name> <board_state>']
-        # Re-split the full tail for clarity
-        tail = line[len('301 '):].strip()               # "Game turn <name> <board>"
-        tail_parts = tail.split(' ', 3)                  # ['Game', 'turn', name, board]
-        active_name = tail_parts[2] if len(tail_parts) > 2 else ''
-        board_enc   = tail_parts[3] if len(tail_parts) > 3 else ''
+        # parts: ['301', 'Game_turn', '<active_player_name>', '<board_state>']
+        active_name = data1
+        board_enc   = data2
         last_board_enc = board_enc
 
         it_is_my_turn = (active_name == my_name)
@@ -503,8 +495,8 @@ def _print_help() -> None:
   MAKE  TTT|C4             Create a private room (returns a room code)
   JOIN  <code>             Join a room by its 6-character code
   MOVE  <pos>              Make a move:
-                             TTT → row,col  (e.g. MOVE 1,2)
-                             C4  → col      (e.g. MOVE 3)
+                             TTT -> row,col  (e.g. MOVE 1,2)
+                             C4  -> col      (e.g. MOVE 3)
   REMATCH                  Request a rematch after a game ends
   ACCEPT                   Accept opponent's rematch request
   DECLINE                  Decline opponent's rematch request

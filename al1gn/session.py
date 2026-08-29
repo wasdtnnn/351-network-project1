@@ -89,7 +89,7 @@ class PlayerSession:
         try:
             with self._send_lock:
                 self.conn.sendall((message + '\r\n').encode('utf-8'))
-                _log(f"[SEND → {self.name or self.addr}] {message}")
+                _log(f"[SEND -> {self.name or self.addr}] {message}")
         except Exception:
             self.alive = False
 
