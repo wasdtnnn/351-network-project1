@@ -93,15 +93,6 @@ Edit the constants at the top of `server.py`:
 
 ---
 
-## Running the Tests
-
-```
-python test_protocol.py
-```
-Runs 57 automated integration tests covering all protocol flows.
-
----
-
 ## Protocol Overview
 
 Text-based, SMTP-inspired. Every message ends with `\r\n`.
