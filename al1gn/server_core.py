@@ -4,6 +4,7 @@ AL1GN/1.0 — Server Core
 AL1GNServer orchestrates all server-side concerns:
   - Accepting TCP connections (one thread per client)
   - Player registration and session registry
+  - Session token issuance and verification
   - Matchmaking: queue-based and room-based
   - Command dispatch (HELO / QUEUE / MAKE / JOIN / MOVE / REMATCH / …)
   - Heartbeat loop per client
@@ -20,6 +21,7 @@ No game-specific logic lives here.
 from __future__ import annotations
 
 import random
+import secrets
 import socket
 import string
 import threading
@@ -29,7 +31,7 @@ from typing import Optional
 import al1gn.session as _session_module
 from al1gn.games import VALID_GAME_TYPES
 from al1gn.protocol import (
-    HOST, PORT,
+    HOST, PORT, TOKEN_LENGTH,
     HEARTBEAT_INTERVAL, PING_TIMEOUT, RECONNECT_TIMEOUT,
     MAX_NAME_LENGTH, ROOM_CODE_LENGTH,
     # 2xx
@@ -38,7 +40,7 @@ from al1gn.protocol import (
     R_ROOM_CREATED, R_JOINED_ROOM,
     R_REMATCH_ACCEPTED, R_PONG,
     # 3xx
-    R_WAITING, R_YOUR_TURN, R_OPP_TURN,
+    R_WAITING, R_GAME_TURN,
     R_GAME_FORFEIT,
     R_REMATCH_REQUESTED, R_OPP_DISCONNECTED, R_REMATCH_DECLINED,
     # 4xx
@@ -47,6 +49,7 @@ from al1gn.protocol import (
     R_GAME_NOT_STARTED,
     R_NAME_TAKEN, R_UNKNOWN_GAME,
     R_BAD_PARAM, R_BAD_SEQUENCE,
+    R_BAD_TOKEN,
     # 5xx
     R_SYNTAX_ERROR,
 )
@@ -64,8 +67,7 @@ def _log(msg: str) -> None:
         print(msg)
 
 
-# Wire the same logger into the session layer so GameSession log calls
-# go through the same lock.
+# Wire the same logger into the session layer
 _session_module.set_logger(_log)
 
 
@@ -82,11 +84,15 @@ class AL1GNServer:
         self.host = host
         self.port = port
 
-        # name → PlayerSession
+        # name → PlayerSession  (canonical registry)
         self._players: dict[str, PlayerSession] = {}
         self._players_lock = threading.Lock()
 
-        # game_type → [PlayerSession, …]  (players waiting in auto-queue)
+        # name → token  (persists across disconnects for the lifetime of the server)
+        self._tokens: dict[str, str] = {}
+        self._tokens_lock = threading.Lock()
+
+        # game_type → [PlayerSession, …]
         self._queues: dict[str, list[PlayerSession]] = {
             gt: [] for gt in VALID_GAME_TYPES
         }
@@ -133,7 +139,6 @@ class AL1GNServer:
         _log(f"[CONNECT] New connection from {addr}")
         session.send(R_SERVICE_READY)
 
-        # Heartbeat runs in its own daemon thread
         threading.Thread(
             target=self._heartbeat_loop,
             args=(session,),
@@ -225,27 +230,66 @@ class AL1GNServer:
         disconnected.pending_game = None
 
     # ======================================================================
+    # Token management
+    # ======================================================================
+
+    def _issue_token(self, name: str) -> str:
+        """Generate and store a new session token for *name*."""
+        token = secrets.token_hex(TOKEN_LENGTH // 2)   # hex: 2 chars per byte
+        with self._tokens_lock:
+            self._tokens[name] = token
+        return token
+
+    def _verify_token(self, name: str, token: str) -> bool:
+        with self._tokens_lock:
+            return self._tokens.get(name) == token
+
+    # ======================================================================
     # Registration
     # ======================================================================
 
-    def _register_player(self, session: PlayerSession, name: str) -> str:
-        """Register *name* for *session*.  Returns the reply string to send."""
+    def _register_player(self, session: PlayerSession, name: str, token: Optional[str]) -> str:
+        """
+        Register or reconnect *session* under *name*.
+
+        First-time registration (no token supplied):
+            - Assigns name, issues a new token.
+            - Reply: "201 Session created <token>"
+
+        Reconnect (token supplied):
+            - Verifies token matches the stored one for *name*.
+            - On match: restores session into any pending game.
+            - Reply: "201 Session restored <board_state>" or "201 Session created <token>"
+            - On mismatch: "460 Bad token"
+
+        Name already taken by a live session:
+            - Reply: "433 Name already taken"
+        """
         if not name or len(name) > MAX_NAME_LENGTH:
             return R_BAD_PARAM
 
         with self._players_lock:
             existing = self._players.get(name)
-            if existing is not None:
-                if existing.alive:
+
+            # ── Name is taken by a live session ──────────────────────────
+            if existing is not None and existing.alive:
+                return R_NAME_TAKEN
+
+            # ── Reconnect attempt (name known, session dead) ──────────────
+            if existing is not None and not existing.alive:
+                if token is None:
+                    # No token provided — treat as name conflict, not reconnect
                     return R_NAME_TAKEN
-                # Dead session — allow reconnect
+                if not self._verify_token(name, token):
+                    return R_BAD_TOKEN
+
                 old_game = existing.pending_game or existing.game
                 self._players[name] = session
                 session.name = name
+                session.token = token
                 session.state = 'Registered'
 
                 if old_game and not old_game.over:
-                    # Slot this session back into the game
                     idx = old_game.players.index(existing)
                     old_game.players[idx] = session
                     session.game = old_game
@@ -254,12 +298,15 @@ class AL1GNServer:
                     board_enc = old_game.board.encode()
                     return f"{R_SESSION_RESTORED} {board_enc}"
 
-                return R_SESSION_CREATED
+                return f"{R_SESSION_CREATED} {self._issue_token(name)}"
 
+            # ── Fresh registration ────────────────────────────────────────
+            new_token = self._issue_token(name)
             self._players[name] = session
             session.name = name
+            session.token = new_token
             session.state = 'Registered'
-            return R_SESSION_CREATED
+            return f"{R_SESSION_CREATED} {new_token}"
 
     # ======================================================================
     # Matchmaking
@@ -274,8 +321,6 @@ class AL1GNServer:
                     return code
 
     def _queue_player(self, session: PlayerSession, game_type: str) -> Optional[str]:
-        """Add *session* to the auto-queue.
-        Returns a reply string, or None if a match was made (match sends its own replies)."""
         if game_type not in VALID_GAME_TYPES:
             return R_UNKNOWN_GAME
         with self._queues_lock:
@@ -284,7 +329,7 @@ class AL1GNServer:
                 if waiting is not session and waiting.alive and waiting.state == 'Waiting':
                     queue.remove(waiting)
                     self._start_game(game_type, waiting, session)
-                    return None          # _start_game already notified both
+                    return None
             queue.append(session)
         session.state = 'Waiting'
         return R_WAITING
@@ -299,8 +344,6 @@ class AL1GNServer:
         return f"{R_ROOM_CREATED} {code}"
 
     def _join_room(self, session: PlayerSession, code: str) -> Optional[str]:
-        """Join a room by code.
-        Returns a reply string on error, or None on success (sends its own replies)."""
         with self._rooms_lock:
             room = self._rooms.get(code)
             if not room:
@@ -320,7 +363,7 @@ class AL1GNServer:
     def _start_game(
         self, game_type: str, p1: PlayerSession, p2: PlayerSession
     ) -> None:
-        """Wire up a GameSession and notify both players."""
+        """Wire up a GameSession and broadcast the initial turn to both players."""
         game = GameSession(
             game_type, p1, p2,
             on_game_end=self._on_game_end,
@@ -331,10 +374,9 @@ class AL1GNServer:
         p2.state = 'InGame'
         p1.rematch_requested = False
         p2.rematch_requested = False
-        board_enc = game.board.encode()
         _log(f"[MATCH] {p1.name} vs {p2.name} — {game_type}")
-        p1.send(f"{R_YOUR_TURN} {board_enc}")
-        p2.send(f"{R_OPP_TURN} {board_enc}")
+        # Broadcast identical turn message to both players
+        game.broadcast_turn()
 
     def _on_game_end(
         self,
@@ -342,20 +384,17 @@ class AL1GNServer:
         loser: Optional[PlayerSession],
         outcome: str,
     ) -> None:
-        """Callback fired by GameSession._finish() after a game concludes."""
-        # PlayerSession.state and record_game_end() are already handled inside
-        # GameSession._finish().  Nothing extra needed here for now, but
-        # keeping the hook lets subclasses log stats, persist scores, etc.
-        pass
+        pass  # Hook for subclasses (stats, persistence, etc.)
 
     # ======================================================================
     # Command dispatcher
     # ======================================================================
 
     def _dispatch(self, session: PlayerSession, line: str) -> None:
-        parts = line.strip().split(' ', 1)
+        parts = line.strip().split(' ', 2)
         cmd = parts[0].upper()
-        arg = parts[1].strip() if len(parts) > 1 else ''
+        arg  = parts[1].strip() if len(parts) > 1 else ''
+        arg2 = parts[2].strip() if len(parts) > 2 else ''
 
         _log(f"[RECV ← {session.name or session.addr}] {line.strip()}")
 
@@ -373,23 +412,21 @@ class AL1GNServer:
             return
 
         # ------------------------------------------------------------------
-        # HELO — must be the first real command
+        # HELO <name> [<token>]
         # ------------------------------------------------------------------
         if cmd == 'HELO':
             if not arg:
                 session.send(R_BAD_PARAM)
                 return
-            reply = self._register_player(session, arg)
+            name = arg
+            token = arg2 if arg2 else None   # token is optional on first connect
+            reply = self._register_player(session, name, token)
             session.send(reply)
-            # If this was a reconnect into an active game, push turn state
+            # Reconnect into an active game — push current turn state
             if reply.startswith('201') and session.state == 'InGame':
                 game = session.game
-                board_enc = game.board.encode()
-                if game.current_player() is session:
-                    session.send(f"{R_YOUR_TURN} {board_enc}")
-                else:
-                    session.send(f"{R_OPP_TURN} {board_enc}")
                 game.opponent_of(session).send("200 Opponent reconnected")
+                game.broadcast_turn()
                 game._start_turn_timer()
             return
 

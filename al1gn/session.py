@@ -21,7 +21,7 @@ from typing import Optional, Callable
 from al1gn.protocol import (
     TURN_TIMEOUT,
     R_MOVE_ACCEPTED,
-    R_YOUR_TURN, R_OPP_TURN,
+    R_GAME_TURN,
     R_GAME_WIN, R_GAME_LOSS, R_GAME_DRAW, R_GAME_FORFEIT,
     R_NOT_YOUR_TURN, R_INVALID_MOVE, R_GAME_NOT_STARTED, R_BAD_PARAM,
 )
@@ -59,6 +59,7 @@ class PlayerSession:
         self.conn = conn
         self.addr = addr
         self.name: Optional[str] = None
+        self.token: Optional[str] = None   # session token issued on first HELO
 
         # Protocol FSM state
         self.state: str = 'Connected'
@@ -69,7 +70,7 @@ class PlayerSession:
         # Held across a disconnect so reconnect can resume
         self.pending_game: Optional[GameSession] = None
 
-        # Post-game rematch bookkeeping (proper attributes, no monkey-patching)
+        # Post-game rematch bookkeeping
         self.last_opponent: Optional[PlayerSession] = None
         self.last_game_type: Optional[str] = None
         self.rematch_requested: bool = False
@@ -117,9 +118,17 @@ class GameSession:
       2. Calls the injected `on_game_end` callback so AL1GNServer can do any
          post-game housekeeping (setting state, wiring last_opponent, etc.).
 
+    Move validation
+    ---------------
+    The protocol delegates move validity entirely to the game implementation
+    (the board class).  GameSession calls board.is_valid_move() which may be
+    game-specific.  The protocol itself only defines that an invalid move
+    results in reply code 451.  What constitutes "invalid" is left to the
+    protocol adopter's board implementation — AL1GN imposes no rules.
+
     Constructor parameters
     ----------------------
-    game_type   : 'TTT' | 'C4'
+    game_type   : 'TTT' | 'C4' (or any type registered by the adopter)
     player1     : goes first, plays 'X'
     player2     : goes second, plays 'O'
     on_game_end : callable(winner, loser, outcome) where outcome is
@@ -160,6 +169,22 @@ class GameSession:
         return self.symbols[self.players.index(player)]
 
     # ------------------------------------------------------------------
+    # Turn notification  (broadcast — same message to both players)
+    # ------------------------------------------------------------------
+
+    def broadcast_turn(self) -> None:
+        """
+        Send '301 Game turn <active_player_name> <board_state>' to both players.
+        Both players receive the identical message; each client compares
+        <active_player_name> to its own registered name to decide whose turn it is.
+        """
+        active = self.current_player()
+        board_enc = self.board.encode()
+        msg = f"{R_GAME_TURN} {active.name} {board_enc}"
+        for p in self.players:
+            p.send(msg)
+
+    # ------------------------------------------------------------------
     # Turn timer
     # ------------------------------------------------------------------
 
@@ -193,17 +218,14 @@ class GameSession:
         """
         Validate and apply one move from *player*.
 
-        Returns (success, result_tag) where result_tag is one of:
-            'ok'       — game continues
-            'win'      — player won
-            'draw'     — board is full with no winner
-        On failure returns (False, reply_code_string).
+        Move validity is entirely delegated to the board implementation —
+        the protocol only defines the reply codes, not the game rules.
 
-        Side-effects when successful:
-          - Sends 204 to the mover.
-          - Sends 303/304 (win) or 305/305 (draw) to both players and calls
-            _finish(), OR sends 302 to mover + 301 to opponent and restarts
-            the turn timer.
+        Returns (success, result_tag) where result_tag is one of:
+            'ok'    — game continues
+            'win'   — player won
+            'draw'  — board full, no winner
+        On failure returns (False, reply_code_string).
         """
         if self.over:
             return False, R_GAME_NOT_STARTED
@@ -213,7 +235,9 @@ class GameSession:
 
         symbol = self.symbol_of(player)
 
-        # Parse and validate
+        # --- Move validation is fully delegated to the board class. ---
+        # The protocol defines only that invalid moves receive 451.
+        # What "invalid" means is decided by the board implementation.
         try:
             if self.game_type == 'TTT':
                 from al1gn.games.ttt import TicTacToeBoard
@@ -221,7 +245,7 @@ class GameSession:
                 if not self.board.is_valid_move(row, col):
                     return False, R_INVALID_MOVE
                 self.board.apply_move(row, col, symbol)
-            else:  # C4
+            else:  # C4 or any future game registered by the adopter
                 from al1gn.games.connect4 import Connect4Board
                 col = Connect4Board.parse_move(arg)
                 if not self.board.is_valid_move(col):
@@ -254,10 +278,9 @@ class GameSession:
             self._finish(player, opponent, 'draw')
             return True, 'draw'
 
-        # Game continues — hand turn to opponent
+        # Game continues — advance turn and broadcast to both players
         self.current_turn = 1 - self.current_turn
-        opponent.send(f"{R_YOUR_TURN} {board_enc}")
-        player.send(f"{R_OPP_TURN} {board_enc}")
+        self.broadcast_turn()
         self._start_turn_timer()
         return True, 'ok'
 
@@ -271,19 +294,10 @@ class GameSession:
         loser: Optional[PlayerSession],
         outcome: str,
     ) -> None:
-        """
-        Update both players' post-game state and fire the callback.
-        *winner* may be None for a draw (both players pass as loser too).
-        """
         p1, p2 = self.players
-
-        # Record last opponent on each player (replaces the old monkey-patch)
         p1.record_game_end(p2, self.game_type)
         p2.record_game_end(p1, self.game_type)
-
-        # Move both players to PostGame
         p1.state = 'PostGame'
         p2.state = 'PostGame'
-
         if self._on_game_end:
             self._on_game_end(winner, loser, outcome)

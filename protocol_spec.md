@@ -12,7 +12,7 @@
 5. โมเดลการทำงาน (AL1GN Model)
 6. ขั้นตอนการทำงานของโปรโตคอล (AL1GN Procedures)
    - 6.1 การเปิดและปิดการเชื่อมต่อ
-   - 6.2 การลงทะเบียนผู้เล่น
+   - 6.2 การลงทะเบียนผู้เล่นและ Session Token
    - 6.3 การจับคู่ผู้เล่น (Matchmaking)
    - 6.4 การดำเนินเกม (Game Session)
    - 6.5 การตรวจสอบการเชื่อมต่อ (Heartbeat)
@@ -25,6 +25,7 @@
    - 7.4 State Diagram
 8. ตัวอย่างสถานการณ์ (Scenarios)
 9. พารามิเตอร์ที่ปรับแต่งได้ (Configurable Parameters)
+10. หมายเหตุการออกแบบ (Design Notes)
 
 ---
 
@@ -67,7 +68,7 @@ AL1GN ออกแบบให้เป็น **โปรโตคอลทั�
 | **สถานะ** | Stateful; เซิร์ฟเวอร์เก็บสถานะเกมตลอดเวลา |
 | **การสื่อสาร** | Bidirectional; server สามารถ push ข้อความไปหา client ได้โดยไม่ต้องรอคำขอ |
 | **ผู้ใช้งาน** | 2 ผู้เล่น (1v1) ต่อเกม |
-| **การตรวจสอบสิทธิ์** | ใช้ชื่อผู้เล่น (player name) เท่านั้น ไม่มี password |
+| **การตรวจสอบสิทธิ์** | ชื่อผู้เล่น + session token (ออกโดย server) |
 | **รูปแบบข้อความ** | Text-based, human-readable, ASCII |
 | **ตัวคั่นข้อความ** | `\r\n` (CRLF) ต่อท้ายทุกข้อความ |
 
@@ -177,20 +178,37 @@ S: 221 Service closing connection\r\n
 ```
 หลังจากนั้น server จะปิด TCP socket
 
-### 6.2 การลงทะเบียนผู้เล่น (Player Registration)
+### 6.2 การลงทะเบียนผู้เล่นและ Session Token (Player Registration & Auth)
 
-คำสั่งแรกที่ client ต้องส่งหลังได้รับ `220` คือ `HELO` พร้อมชื่อผู้เล่น:
+คำสั่งแรกที่ client ต้องส่งหลังได้รับ `220` คือ `HELO` พร้อมชื่อผู้เล่น
+
+#### 6.2.1 การลงทะเบียนครั้งแรก
 
 ```
 C: HELO PlayerOne\r\n
-S: 201 Session created\r\n
+S: 201 Session created <token>\r\n
 ```
 
-หากชื่อถูกใช้งานแล้ว:
+Server จะออก **session token** (สตริง hex แบบสุ่ม 16 ตัวอักษร) พร้อมกับการยืนยันการลงทะเบียน Client ควรเก็บ token นี้ไว้เพื่อใช้ reconnect
+
+#### 6.2.2 การ Reconnect ด้วย Token
+
+หาก client ตัดการเชื่อมต่อและต้องการกลับเข้าเกมเดิม ให้ส่ง HELO พร้อมทั้งชื่อและ token:
+
 ```
-C: HELO PlayerOne\r\n
-S: 407 Name already taken\r\n
+C: HELO PlayerOne <token>\r\n
+S: 201 Session restored <board_state>\r\n
 ```
+
+Token ป้องกันไม่ให้ผู้อื่นแอบอ้างชื่อเพื่อเข้าร่วมเกมที่กำลังดำเนินอยู่
+
+#### 6.2.3 กรณีผิดพลาด
+
+| สถานการณ์ | Server ตอบกลับ |
+|-----------|---------------|
+| ชื่อนี้มีผู้ใช้งานอยู่แล้ว (live session) | `433 Name already taken` |
+| ชื่อตรง แต่ token ไม่ตรง | `460 Bad token` |
+| ชื่อตรง และ token ตรง | `201 Session restored ...` |
 
 ### 6.3 การจับคู่ผู้เล่น (Matchmaking)
 
@@ -203,14 +221,14 @@ C: QUEUE TTT\r\n
 S: 300 Waiting for opponent\r\n
 ```
 
-เมื่อมีผู้เล่นอีกคนเข้าคิวเกมชนิดเดียวกัน server จะจับคู่ทั้งสองและแจ้ง:
-```
--- ผู้เล่น 1 (เริ่มก่อน) --
-S: 301 Your turn [board_state]\r\n
+เมื่อมีผู้เล่นอีกคนเข้าคิวเกมชนิดเดียวกัน server จะจับคู่ทั้งสองและ **broadcast ข้อความเดียวกันไปยังผู้เล่นทั้งคู่**:
 
--- ผู้เล่น 2 --
-S: 302 Opponent's turn [board_state]\r\n
 ```
+-- ทั้ง P1 และ P2 ได้รับข้อความเดียวกัน --
+S: 301 Game turn <active_player_name> <board_state>\r\n
+```
+
+`<active_player_name>` คือชื่อของผู้เล่นที่ถึงตาเดิน แต่ละ client เปรียบเทียบชื่อนี้กับชื่อของตัวเองเพื่อทราบว่าถึงตาตัวเองหรือไม่
 
 #### 6.3.2 Room-based (ใช้รหัสห้อง)
 
@@ -225,9 +243,9 @@ S: 202 Room created ABC123\r\n
 C: JOIN ABC123\r\n
 S: 203 Joined room ABC123\r\n
 
--- server แจ้งทั้งคู่ --
-S→P1: 301 Your turn [board_state]\r\n
-S→P2: 302 Opponent's turn [board_state]\r\n
+-- server broadcast เหมือนกันทั้งคู่ --
+S→P1: 301 Game turn <active_player_name> <board_state>\r\n
+S→P2: 301 Game turn <active_player_name> <board_state>\r\n
 ```
 
 ### 6.4 การดำเนินเกม (Game Session)
@@ -246,9 +264,10 @@ C: MOVE 3\r\n
 S: 204 Move accepted\r\n
 ```
 
-หลังจากตอบกลับ `204` server จะส่ง push message ไปยังคู่ต่อสู้:
+หลังจากตอบกลับ `204` server จะ **broadcast `301 Game turn`** ไปยังผู้เล่นทั้งคู่:
+
 ```
-S→opponent: 301 Your turn [board_state]\r\n
+S→both: 301 Game turn <next_player_name> <board_state>\r\n
 ```
 
 #### 6.4.2 รูปแบบ board_state
@@ -277,14 +296,14 @@ board_state คือ string ที่แสดงสถานะกระดา
 
 #### 6.4.4 การตรวจสอบการเดินที่ไม่ถูกต้อง
 
-Client ควรตรวจสอบเบื้องต้นก่อนส่ง MOVE แต่ server เป็น **ผู้ตัดสินที่มีอำนาจสูงสุด**:
+AL1GN เป็น **generalized protocol** — โปรโตคอลกำหนดเพียงว่าการเดินที่ไม่ถูกต้องจะได้รับรหัส `451 Invalid move` เท่านั้น ส่วนนิยามของ "ไม่ถูกต้อง" นั้นเป็น **หน้าที่ของ protocol adopter** ที่จะกำหนดผ่าน board implementation ของตนเอง (ดูหัวข้อ 10.1)
 
 ```
-C: MOVE 1,1\r\n   <-- ช่องที่มีหมากแล้ว
-S: 405 Invalid move\r\n
+C: MOVE 1,1\r\n   <-- ช่องที่มีหมากแล้ว (ตามกฎ TTT)
+S: 451 Invalid move\r\n
 
 C: MOVE 1,2\r\n   <-- ไม่ใช่ตาของผู้เล่นคนนี้
-S: 404 Not your turn\r\n
+S: 450 Not your turn\r\n
 ```
 
 ### 6.5 การตรวจสอบการเชื่อมต่อ (Heartbeat)
@@ -310,9 +329,9 @@ S: 206 Pong received\r\n
 
 2. Server เริ่มนับถอยหลัง `RECONNECT_TIMEOUT` วินาที (ค่า default: 60 วินาที)
 
-3. หากผู้เล่นที่ตัดการเชื่อมต่อกลับมาเชื่อมต่อและส่ง `HELO <same_name>` ภายใน timeout:
+3. หากผู้เล่นที่ตัดการเชื่อมต่อกลับมาเชื่อมต่อและส่ง `HELO <same_name> <token>` ภายใน timeout:
    ```
-   C: HELO PlayerOne\r\n
+   C: HELO PlayerOne <token>\r\n
    S: 201 Session restored [board_state]\r\n
    ```
    เกมดำเนินต่อจากจุดที่ค้างไว้
@@ -338,9 +357,8 @@ S→opponent: 307 Rematch requested\r\n
 C: ACCEPT\r\n
 S: 205 Rematch accepted\r\n
 
--- server แจ้งทั้งคู่ เริ่มเกมใหม่ --
-S→P1: 301 Your turn [board_state]\r\n
-S→P2: 302 Opponent's turn [board_state]\r\n
+-- server broadcast เกมใหม่ให้ทั้งคู่ --
+S→both: 301 Game turn <active_player_name> <board_state>\r\n
 ```
 
 หากคู่ต่อสู้ปฏิเสธ:
@@ -360,7 +378,8 @@ S→requester: 309 Rematch declined\r\n
 
 | คำสั่ง | ทิศทาง | รูปแบบ | คำอธิบาย |
 |--------|--------|--------|---------|
-| `HELO` | C→S | `HELO <name>\r\n` | ลงทะเบียน/เรียกคืน session ด้วยชื่อผู้เล่น |
+| `HELO` | C→S | `HELO <name>\r\n` | ลงทะเบียนครั้งแรก — server ออก token |
+| `HELO` | C→S | `HELO <name> <token>\r\n` | Reconnect — ยืนยันตัวตนด้วย token |
 | `QUEUE` | C→S | `QUEUE <game>\r\n` | เข้าร่วมคิวจับคู่อัตโนมัติ (ตัวอย่าง game: TTT หรือ C4) |
 | `MAKE` | C→S | `MAKE <game>\r\n` | สร้างห้องส่วนตัว server ตอบด้วยรหัสห้อง |
 | `JOIN` | C→S | `JOIN <code>\r\n` | เข้าร่วมห้องด้วยรหัส |
@@ -386,9 +405,10 @@ S→requester: 309 Rematch declined\r\n
 | รหัส | Phrase | ความหมาย |
 |------|--------|---------|
 | 200 | OK | คำสั่งสำเร็จทั่วไป |
-| 201 | Session created | ลงทะเบียน/เรียกคืน session สำเร็จ |
-| 202 | Room created | สร้างห้องสำเร็จ argument คือรหัสห้อง |
-| 203 | Joined room | เข้าร่วมห้องสำเร็จ |
+| 201 | Session created `<token>` | ลงทะเบียนสำเร็จ — token แนบมาด้วย |
+| 201 | Session restored `<board>` | Reconnect สำเร็จ — board_state แนบมาด้วย |
+| 202 | Room created `<code>` | สร้างห้องสำเร็จ — รหัสห้องแนบมาด้วย |
+| 203 | Joined room `<code>` | เข้าร่วมห้องสำเร็จ |
 | 204 | Move accepted | server ยืนยันการเดิน |
 | 205 | Rematch accepted | เริ่มเกมใหม่ |
 | 206 | Pong received | ตอบ heartbeat |
@@ -398,11 +418,10 @@ S→requester: 309 Rematch declined\r\n
 | รหัส | Phrase | ความหมาย |
 |------|--------|---------|
 | 300 | Waiting for opponent | รอคู่ต่อสู้เข้าร่วม |
-| 301 | Your turn | ถึงตาคุณเดิน พร้อม board_state |
-| 302 | Opponent's turn | รอคู่ต่อสู้เดิน พร้อม board_state |
-| 303 | Game over Win | คุณชนะ พร้อม board_state สุดท้าย |
-| 304 | Game over Loss | คุณแพ้ พร้อม board_state สุดท้าย |
-| 305 | Game over Draw | เสมอ พร้อม board_state สุดท้าย |
+| 301 | Game turn `<active_name>` `<board>` | Broadcast ไปยัง **ผู้เล่นทั้งคู่** — `<active_name>` คือชื่อผู้ที่ถึงตาเดิน |
+| 303 | Game over Win `<board>` | คุณชนะ พร้อม board_state สุดท้าย |
+| 304 | Game over Loss `<board>` | คุณแพ้ พร้อม board_state สุดท้าย |
+| 305 | Game over Draw `<board>` | เสมอ พร้อม board_state สุดท้าย |
 | 306 | Game over Forfeit | คู่ต่อสู้ตัดการเชื่อมต่อและหมด timeout |
 | 307 | Rematch requested | คู่ต่อสู้ขอเล่นซ้ำ |
 | 308 | Opponent disconnected | คู่ต่อสู้ตัดการเชื่อมต่อ กำลังรอ reconnect |
@@ -410,17 +429,22 @@ S→requester: 309 Rematch declined\r\n
 
 #### 4xx — ข้อผิดพลาดจาก Client
 
-| รหัส | Phrase | ความหมาย |
-|------|--------|---------|
-| 400 | Bad request | รูปแบบข้อความไม่ถูกต้อง |
-| 401 | Not registered | ยังไม่ได้ส่ง HELO ก่อน |
-| 402 | Room not found | ไม่พบรหัสห้องที่ระบุ |
-| 403 | Room full | ห้องมีผู้เล่นครบ 2 คนแล้ว |
-| 404 | Not your turn | ส่ง MOVE ในตาของคู่ต่อสู้ |
-| 405 | Invalid move | การเดินที่ส่งมาไม่ถูกกฎเกม |
-| 406 | Game not started | ส่ง MOVE ก่อนเกมเริ่ม |
-| 407 | Name already taken | ชื่อผู้เล่นนี้ถูกใช้อยู่แล้ว |
-| 408 | Unknown game type | ระบุชนิดเกมไม่ถูกต้อง |
+รหัส 4xx ออกแบบตาม FTP RFC 959 โดยเลขหลักที่ 2 ระบุกลุ่มของข้อผิดพลาด:
+- **x3x** — กลุ่มการยืนยันตัวตนและ resource ที่ร้องขอ
+- **x5x** — กลุ่ม action ที่ไม่สามารถดำเนินการได้ (เทียบกับ FTP 45x)
+
+| รหัส | Phrase | ความหมาย | เทียบกับ FTP |
+|------|--------|---------|-------------|
+| 400 | Bad request | รูปแบบข้อความไม่ถูกต้อง | 400 generic |
+| 430 | Not registered | ยังไม่ได้ส่ง HELO ก่อน | FTP 430 not logged in |
+| 431 | Room not found | ไม่พบรหัสห้องที่ระบุ | FTP 431 resource unavailable |
+| 432 | Room full | ห้องมีผู้เล่นครบ 2 คนแล้ว | FTP 432 resource unavailable |
+| 433 | Name already taken | ชื่อผู้เล่นนี้ถูกใช้อยู่แล้ว | FTP 433 credential conflict |
+| 434 | Unknown game type | ระบุชนิดเกมไม่ถูกต้อง | FTP 434 host/resource unavailable |
+| 450 | Not your turn | ส่ง MOVE ในตาของคู่ต่อสู้ | FTP 450 action not taken, retry |
+| 451 | Invalid move | การเดินผิดกฎเกม (game-defined) | FTP 451 action aborted |
+| 452 | Game not started | ส่ง MOVE ก่อนเกมเริ่ม | FTP 452 insufficient state |
+| 460 | Bad token | Token ไม่ตรงกับชื่อที่ระบุ | (AL1GN extension) |
 
 #### 5xx — ข้อผิดพลาดจาก Server
 
@@ -436,15 +460,16 @@ S→requester: 309 Rematch declined\r\n
 
 | คำสั่ง | ตอบกลับเมื่อสำเร็จ | ตอบกลับเมื่อผิดพลาด |
 |--------|-------------------|-------------------|
-| HELO | 201 | 407, 501 |
-| QUEUE | 300 | 401, 408, 503 |
-| MAKE | 202 | 401, 408, 503 |
-| JOIN | 203 | 401, 402, 403, 503 |
-| MOVE | 204 | 401, 404, 405, 406, 501 |
+| HELO (ใหม่) | 201 + token | 433, 501 |
+| HELO (reconnect) | 201 restored | 433, 460, 501 |
+| QUEUE | 300 | 430, 434, 503 |
+| MAKE | 202 | 430, 434, 503 |
+| JOIN | 203 | 430, 431, 432, 503 |
+| MOVE | 204 | 430, 450, 451, 452, 501 |
 | PONG | 206 | — |
-| REMATCH | 200 | 401, 503 |
-| ACCEPT | 205 | 401, 503 |
-| DECLINE | 200 | 401, 503 |
+| REMATCH | 200 | 430, 503 |
+| ACCEPT | 205 | 430, 503 |
+| DECLINE | 200 | 430, 503 |
 | QUIT | 221 | — |
 
 **กฎลำดับคำสั่ง:**
@@ -508,77 +533,86 @@ S→requester: 309 Rematch declined\r\n
 ```
 S: 220 AL1GN/1.0 Service ready\r\n
 C: HELO Alice\r\n
-S: 201 Session created\r\n
+S: 201 Session created a3f8c2d1e9b047ab\r\n
 ```
 
 ### สถานการณ์ที่ 2: เกม TTT ผ่านคิว (Alice ชนะ)
 
 ```
--- Alice (Client 1) --               -- Bob (Client 2) --
-C: QUEUE TTT\r\n                     C: QUEUE TTT\r\n
-S: 300 Waiting for opponent\r\n      S: 300 Waiting for opponent\r\n
+-- Alice (Client 1) --                  -- Bob (Client 2) --
+C: QUEUE TTT\r\n                        C: QUEUE TTT\r\n
+S: 300 Waiting for opponent\r\n         S: 300 Waiting for opponent\r\n
 
--- server จับคู่สำเร็จ --
-S: 301 Your turn .,.,.|.,.,.|.,.,.\r\n   S: 302 Opponent's turn .,.,.|.,.,.|.,.,.\r\n
+-- server จับคู่สำเร็จ — broadcast เดียวกันทั้งคู่ --
+S: 301 Game turn Alice .,.,./.,.,./.,.,.\r\n
+                                        S: 301 Game turn Alice .,.,./.,.,./.,.,.\r\n
+-- Alice เห็นชื่อตัวเอง → ถึงตาฉัน --
+-- Bob เห็นชื่อ Alice → รอ --
 
 C: MOVE 0,0\r\n
 S: 204 Move accepted\r\n
-                                     S: 301 Your turn X,.,.|.,.,.|.,.,.\r\n
+S: 301 Game turn Bob X,.,./.,.,./.,.,.\r\n
+                                        S: 301 Game turn Bob X,.,./.,.,./.,.,.\r\n
 
-                                     C: MOVE 1,1\r\n
-                                     S: 204 Move accepted\r\n
-S: 301 Your turn X,.,.|.,O,.|.,.,.\r\n
+                                        C: MOVE 1,1\r\n
+                                        S: 204 Move accepted\r\n
+S: 301 Game turn Alice X,.,./.,O,./.,.,.\r\n
+                                        S: 301 Game turn Alice X,.,./.,O,./.,.,.\r\n
 
 C: MOVE 0,1\r\n
 S: 204 Move accepted\r\n
-                                     S: 301 Your turn X,X,.|.,O,.|.,.,.\r\n
+S: 301 Game turn Bob X,X,./.,O,./.,.,.\r\n
+                                        S: 301 Game turn Bob X,X,./.,O,./.,.,.\r\n
 
-                                     C: MOVE 2,2\r\n
-                                     S: 204 Move accepted\r\n
-S: 301 Your turn X,X,.|.,O,.|.,.,O\r\n
+                                        C: MOVE 2,2\r\n
+                                        S: 204 Move accepted\r\n
+S: 301 Game turn Alice X,X,./.,O,./.,.,O\r\n
+                                        S: 301 Game turn Alice X,X,./.,O,./.,.,O\r\n
 
 C: MOVE 0,2\r\n
 S: 204 Move accepted\r\n
-S: 303 Game over Win X,X,X|.,O,.|.,.,O\r\n
-                                     S: 304 Game over Loss X,X,X|.,O,.|.,.,O\r\n
+S: 303 Game over Win X,X,X/.,O,./.,.,O\r\n
+                                        S: 304 Game over Loss X,X,X/.,O,./.,.,O\r\n
 ```
 
 ### สถานการณ์ที่ 3: สร้างห้องและ Rematch
 
 ```
--- Alice --                          -- Bob --
+-- Alice --                             -- Bob --
 C: MAKE C4\r\n
 S: 202 Room created XK9P2M\r\n
-                                     C: JOIN XK9P2M\r\n
-                                     S: 203 Joined room XK9P2M\r\n
+                                        C: JOIN XK9P2M\r\n
+                                        S: 203 Joined room XK9P2M\r\n
 
-S: 301 Your turn [board]\r\n         S: 302 Opponent's turn [board]\r\n
+S: 301 Game turn Alice [board]\r\n      S: 301 Game turn Alice [board]\r\n
 
 [... เกมดำเนินไป ...]
 
-S: 304 Game over Loss [board]\r\n    S: 303 Game over Win [board]\r\n
+S: 304 Game over Loss [board]\r\n       S: 303 Game over Win [board]\r\n
 
 C: REMATCH\r\n
 S: 200 OK\r\n
-                                     S: 307 Rematch requested\r\n
-                                     C: ACCEPT\r\n
-                                     S: 205 Rematch accepted\r\n
+                                        S: 307 Rematch requested\r\n
+                                        C: ACCEPT\r\n
+                                        S: 205 Rematch accepted\r\n
+S: 205 Rematch accepted\r\n
 
-S: 302 Opponent's turn [board]\r\n   S: 301 Your turn [board]\r\n
+S: 301 Game turn Alice [board]\r\n      S: 301 Game turn Alice [board]\r\n
 ```
 
-### สถานการณ์ที่ 4: การตัดการเชื่อมต่อและ Reconnect
+### สถานการณ์ที่ 4: การตัดการเชื่อมต่อและ Reconnect ด้วย Token
 
 ```
--- Alice --                          -- Bob --
+-- Alice --                             -- Bob --
 [กำลังเล่นเกม...]
 [Bob ตัดการเชื่อมต่อ]
 S: 308 Opponent disconnected Waiting for reconnect\r\n
 
-[Bob reconnect และส่ง HELO อีกครั้ง]
-                                     C: HELO Bob\r\n
-                                     S: 201 Session restored [board_state]\r\n
-S: 301 Your turn [board_state]\r\n
+[Bob reconnect และส่ง HELO พร้อม token]
+                                        C: HELO Bob b7d4e2f1a0c39815\r\n
+                                        S: 201 Session restored [board_state]\r\n
+S: 301 Game turn Alice [board_state]\r\n
+                                        S: 301 Game turn Alice [board_state]\r\n
 [เกมดำเนินต่อ]
 ```
 
@@ -587,19 +621,23 @@ S: 301 Your turn [board_state]\r\n
 ```
 -- ส่ง MOVE ก่อน HELO --
 C: MOVE 1,1\r\n
-S: 401 Not registered\r\n
+S: 430 Not registered\r\n
 
 -- ส่ง MOVE ผิดตา --
 C: MOVE 2,2\r\n
-S: 404 Not your turn\r\n
+S: 450 Not your turn\r\n
 
--- เดินในช่องที่มีหมากแล้ว --
+-- เดินในช่องที่มีหมากแล้ว (ตามกฎของ TTT) --
 C: MOVE 0,0\r\n
-S: 405 Invalid move\r\n
+S: 451 Invalid move\r\n
 
 -- รหัสห้องไม่มี --
 C: JOIN ZZZZZZ\r\n
-S: 402 Room not found\r\n
+S: 431 Room not found\r\n
+
+-- Reconnect ด้วย token ผิด --
+C: HELO Bob wrongtoken123456\r\n
+S: 460 Bad token\r\n
 ```
 
 ---
@@ -616,8 +654,68 @@ S: 402 Room not found\r\n
 | `PING_TIMEOUT` | 10 วินาที | เวลารอ PONG ก่อนถือว่าตัดการเชื่อมต่อ |
 | `MAX_NAME_LENGTH` | 32 ตัวอักษร | ความยาวสูงสุดของชื่อผู้เล่น |
 | `ROOM_CODE_LENGTH` | 6 ตัวอักษร | ความยาวของรหัสห้อง |
+| `TOKEN_LENGTH` | 16 ตัวอักษร (hex) | ความยาวของ session token ที่สุ่มออกโดย server |
 
 ---
 
 *AL1GN/1.0 — Application-Layer 1-on-1 Gaming Network*
 *ออกแบบโดยอ้างอิง RFC 821 (Simple Mail Transfer Protocol)*
+
+---
+
+## 10. หมายเหตุการออกแบบ (Design Notes)
+
+### 10.1 Move Validation เป็นหน้าที่ของ Protocol Adopter
+
+AL1GN ออกแบบเป็น **generalized protocol** ที่ไม่ผูกติดกับเกมใดเกมหนึ่ง โปรโตคอลกำหนดเพียงว่า:
+
+- การเดินที่ server ยอมรับจะได้รับ `204 Move accepted`
+- การเดินที่ server ปฏิเสธจะได้รับ `451 Invalid move`
+
+**ว่าอะไรคือ "การเดินที่ถูกต้อง" ไม่ใช่ข้อกำหนดของโปรโตคอล** — เป็นความรับผิดชอบของ board implementation ที่ protocol adopter จัดเตรียมมา ตัวอย่างเช่น:
+
+- Tic-Tac-Toe: ช่องต้องว่าง, อยู่ในกระดาน 3×3
+- Connect4: คอลัมน์ต้องไม่เต็ม, อยู่ใน 0–6
+- เกมอื่น ๆ ในอนาคต: กำหนดกฎเองทั้งหมด
+
+ผลดีคือ server ไม่จำเป็นต้องรู้กฎของเกม — GameSession เพียงเรียก `board.is_valid_move()` และ `board.apply_move()` แล้วตอบกลับตามผลลัพธ์
+
+### 10.2 Unified Turn Broadcast (รหัส 301)
+
+รหัส `301 Game turn <active_player_name> <board_state>` ถูกส่งเป็น **broadcast เดียวกันทั้งสองฝ่าย** แทนที่รหัส 301/302 คู่เดิม
+
+ข้อดี:
+- **ลดความซ้ำซ้อน** — server ส่งข้อความครั้งเดียวแทนสองครั้งที่ต่างกัน
+- **Client กำหนด logic เอง** — เปรียบเทียบ `<active_player_name>` กับ `my_name` ที่เก็บไว้
+- **Extensible** — หาก adopter ต้องการ spectator mode สามารถส่ง broadcast เดิมให้ผู้ชมได้โดยไม่ต้องเปลี่ยนรูปแบบ
+
+### 10.3 Session Token Authentication
+
+เมื่อ client ลงทะเบียนครั้งแรก (`HELO <name>`) server จะออก **session token** แบบสุ่ม (cryptographically secure hex string) และส่งกลับใน `201 Session created <token>`
+
+Token ใช้แก้ปัญหาสองอย่าง:
+
+1. **Name hijacking** — ป้องกันไม่ให้ผู้อื่น reconnect ด้วยชื่อเดียวกันเพื่อเข้าแทรกเกมที่กำลังดำเนินอยู่
+2. **Orphaned session** — เมื่อ client ตัดการเชื่อมต่อโดยไม่ตั้งใจ เจ้าของที่ถูกต้องสามารถ reconnect ด้วย `HELO <name> <token>` เพื่อดำเนินเกมต่อ
+
+Token ไม่เข้ารหัสเนื้อหาของเกม และไม่ใช่ password ถาวร — มีอายุตลอด session ของ server instance นั้น ๆ
+
+### 10.4 หลักการเลือก 4xx Error Codes
+
+รหัส 4xx ออกแบบให้สอดคล้องกับ **FTP RFC 959** ซึ่งกำหนดความหมายของหลักที่สองดังนี้:
+
+- **x0x** — Syntax group (เช่น 400)
+- **x3x** — Authentication / identity group (เช่น 430–434, 460)
+- **x5x** — Action-not-taken group (เช่น 450–452)
+
+เหตุผลที่ไม่ใช้รหัสเดิม (400–408):
+- **404** เป็น "Not Found" ที่รู้จักกันทั่วไปจาก HTTP — การนำไปใช้ใน context อื่นสร้างความสับสน
+- **401** เป็น "Unauthorized" ใน HTTP — ใช้กับ "Not registered" ไม่ตรงความหมาย
+- **403** เป็น "Forbidden" ใน HTTP — ใช้กับ "Room full" ทำให้ผู้ใช้สับสน
+
+การใช้ช่วง 43x และ 45x ทำให้ semantic ชัดเจนและสอดคล้องกับ FTP ซึ่งเป็นต้นแบบของโปรโตคอลนี้
+
+---
+
+*AL1GN/1.0 — Application-Layer 1-on-1 Gaming Network*
+*ออกแบบโดยอ้างอิง RFC 821 (Simple Mail Transfer Protocol) และ RFC 959 (File Transfer Protocol)*

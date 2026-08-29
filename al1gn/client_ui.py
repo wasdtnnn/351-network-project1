@@ -10,8 +10,7 @@ Everything the human-facing side of the client needs:
 
 Dependencies:
   - al1gn.client_net  (send_raw, set_alive, alive)
-  - al1gn.protocol    (reply code prefixes — only the numeric strings needed
-                       for the match dispatch table)
+  - al1gn.protocol    (reply code prefixes)
 
 No imports from session, server_core, or games.
 """
@@ -42,9 +41,10 @@ def _log(msg: str) -> None:
 
 # ---------------------------------------------------------------------------
 # Client-side session state
-# (module-level so handle_server_message and input_loop share them)
 # ---------------------------------------------------------------------------
-state: str = 'Connected'   # mirrors the server-side FSM
+state: str = 'Connected'
+my_name: str | None = None        # registered name — used to parse 301
+my_token: str | None = None       # session token received on 201
 my_symbol: str | None = None
 game_type: str | None = None
 my_turn: bool = False
@@ -63,7 +63,6 @@ def _reset_game_state() -> None:
 # ---------------------------------------------------------------------------
 
 def _decode_board(encoded: str) -> list[list[str]]:
-    """'X,.,O/.,X,./O,.,.' → list of rows (works for both TTT and C4)."""
     return [row.split(',') for row in encoded.split('/')]
 
 
@@ -151,14 +150,15 @@ def _validate_c4(arg: str, board_enc: str) -> tuple[bool, str]:
 
 def handle_server_message(line: str, sock: socket.socket) -> None:
     """Parse one server reply line and update client state / print feedback."""
-    global state, my_symbol, my_turn, last_board_enc, game_type
+    global state, my_name, my_token, my_symbol, my_turn, last_board_enc, game_type
 
     _log(f"[RECV ← SERVER] {line}")
 
-    parts = line.split(' ', 2)
-    code  = parts[0]
+    parts = line.split(' ', 3)
+    code   = parts[0]
     phrase = parts[1] if len(parts) > 1 else ''
-    data   = parts[2] if len(parts) > 2 else ''
+    data1  = parts[2] if len(parts) > 2 else ''
+    data2  = parts[3] if len(parts) > 3 else ''
 
     # ------------------------------------------------------------------
     # Connection / registration
@@ -169,12 +169,23 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
 
     elif code == '201':
         state = 'Registered'
-        if 'restored' in phrase.lower() and data:
-            last_board_enc = data
+        # phrase is 'Session' here; data1 is 'created'/'restored'; data2 is token/board
+        full_tail = ' '.join(parts[1:])   # e.g. "Session created <token>"
+        tail_parts = full_tail.split(' ', 2)  # ['Session', 'created'/'restored', payload]
+        action  = tail_parts[1].lower() if len(tail_parts) > 1 else ''
+        payload = tail_parts[2] if len(tail_parts) > 2 else ''
+
+        if action == 'restored' and payload:
+            # payload is the board_state
+            last_board_enc = payload
             _log("[INFO] Session restored! Resuming your game:")
-            _log(render_board(data))
+            _log(render_board(payload))
         else:
-            _log("[INFO] Registered! Start a game:")
+            # payload is the session token
+            my_token = payload
+            _log(f"[INFO] Registered! Your session token: {my_token}")
+            _log("[INFO] Keep this token — you will need it to reconnect as the same player.")
+            _log("[INFO] Start a game:")
             _log("[INFO]   QUEUE TTT | C4   — auto-matchmaking")
             _log("[INFO]   MAKE  TTT | C4   — create private room")
             _log("[INFO]   JOIN  <code>     — join by room code")
@@ -183,14 +194,18 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
         _log("[INFO] Server closed the connection.")
         net.set_alive(False)
 
-    elif code == '407':
+    elif code == '433':
         _log("[WARN] Name already taken. Try:  HELO <other_name>")
+
+    elif code == '460':
+        _log("[ERROR] Bad token — name/token mismatch. Cannot reconnect as this player.")
 
     # ------------------------------------------------------------------
     # Matchmaking
     # ------------------------------------------------------------------
     elif code == '202':
-        room_code = data if data else phrase
+        # "202 Room created <code>"
+        room_code = data1
         _log(f"[INFO] Room created — share this code: {room_code}")
         _log("[INFO] Waiting for opponent to join…")
         state = 'Waiting'
@@ -204,54 +219,69 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
         _log("[INFO] Waiting for an opponent…")
 
     # ------------------------------------------------------------------
-    # Game start / turn notifications
+    # 301 Game turn <active_player_name> <board_state>
+    #
+    # Both players receive the same message.  The client compares
+    # <active_player_name> to its own registered name (my_name) to
+    # determine whether it is their turn or the opponent's.
     # ------------------------------------------------------------------
     elif code == '301':
-        board_enc = data
+        # parts: ['301', 'Game', 'turn', '<active_player_name> <board_state>']
+        # Re-split the full tail for clarity
+        tail = line[len('301 '):].strip()               # "Game turn <name> <board>"
+        tail_parts = tail.split(' ', 3)                  # ['Game', 'turn', name, board]
+        active_name = tail_parts[2] if len(tail_parts) > 2 else ''
+        board_enc   = tail_parts[3] if len(tail_parts) > 3 else ''
         last_board_enc = board_enc
-        if state != 'InGame':
-            state = 'InGame'
-            my_symbol = 'X'
-            _log("[INFO] Game started! You are X (go first).")
-        my_turn = True
-        if board_enc:
-            _log(render_board(board_enc))
-        _prompt_move()
 
-    elif code == '302':
-        board_enc = data
-        last_board_enc = board_enc
+        it_is_my_turn = (active_name == my_name)
+
         if state != 'InGame':
             state = 'InGame'
-            my_symbol = 'O'
-            _log("[INFO] Game started! You are O (opponent goes first).")
-        my_turn = False
+            # Determine symbol: if I go first I am X (index 0)
+            if it_is_my_turn:
+                my_symbol = 'X'
+                _log("[INFO] Game started! You are X (go first).")
+            else:
+                my_symbol = 'O'
+                _log("[INFO] Game started! You are O (opponent goes first).")
+
+        my_turn = it_is_my_turn
         if board_enc:
             _log(render_board(board_enc))
-        _log("[INFO] Waiting for opponent's move…")
+
+        if it_is_my_turn:
+            _prompt_move()
+        else:
+            _log(f"[INFO] Waiting for {active_name}'s move…")
 
     # ------------------------------------------------------------------
     # Game over
     # ------------------------------------------------------------------
     elif code == '303':
-        if data:
-            _log(render_board(data))
+        if data2:
+            _log(render_board(data2))
+        elif data1:
+            _log(render_board(data1))
         _log("[INFO] *** YOU WIN! Congratulations! ***")
         state = 'PostGame'
         my_turn = False
         _prompt_rematch()
 
     elif code == '304':
-        if data:
-            _log(render_board(data))
+        # Could be "304 Game over Loss <board>" or "304 Game over Loss Timeout"
+        board_or_msg = ' '.join(parts[3:]) if len(parts) > 3 else ''
+        if board_or_msg and board_or_msg != 'Timeout':
+            _log(render_board(board_or_msg))
         _log("[INFO] *** YOU LOSE. Better luck next time! ***")
         state = 'PostGame'
         my_turn = False
         _prompt_rematch()
 
     elif code == '305':
-        if data:
-            _log(render_board(data))
+        board_or_msg = ' '.join(parts[3:]) if len(parts) > 3 else ''
+        if board_or_msg:
+            _log(render_board(board_or_msg))
         _log("[INFO] *** DRAW! ***")
         state = 'PostGame'
         my_turn = False
@@ -264,7 +294,7 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
         _prompt_rematch()
 
     # ------------------------------------------------------------------
-    # Disconnection
+    # Disconnection / reconnect
     # ------------------------------------------------------------------
     elif code == '308':
         _log("[INFO] Opponent disconnected. Waiting for them to reconnect…")
@@ -297,14 +327,14 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
     elif code == '204':
         _log("[INFO] Move accepted.")
 
-    elif code == '404':
+    elif code == '450':
         _log("[WARN] Not your turn!")
 
-    elif code == '405':
+    elif code == '451':
         _log("[WARN] Invalid move — try again:")
         _prompt_move()
 
-    elif code == '406':
+    elif code == '452':
         _log("[WARN] Game has not started yet.")
 
     # ------------------------------------------------------------------
@@ -314,33 +344,32 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
         net.send_raw(sock, 'PONG')
 
     elif code == '206':
-        pass   # pong acknowledged — nothing to show
+        pass   # pong acknowledged
 
     # ------------------------------------------------------------------
     # Errors
     # ------------------------------------------------------------------
     elif code == '400':
         _log(f"[ERROR] Bad request: {line}")
-    elif code == '401':
+    elif code == '430':
         _log("[ERROR] Not registered — send HELO <name> first.")
-    elif code == '402':
+    elif code == '431':
         _log("[ERROR] Room not found. Check the code and try again.")
-    elif code == '403':
+    elif code == '432':
         _log("[ERROR] Room is full.")
-    elif code == '408':
+    elif code == '434':
         _log("[ERROR] Unknown game type. Use TTT or C4.")
     elif code == '500':
-        _log(f"[ERROR] Server does not recognise that command.")
+        _log("[ERROR] Server does not recognise that command.")
     elif code == '501':
         _log(f"[ERROR] Bad parameter: {line}")
     elif code == '503':
         _log(f"[ERROR] Command out of sequence: {line}")
     elif code == '520':
-        _log(f"[ERROR] Internal server error.")
+        _log("[ERROR] Internal server error.")
     elif code == '521':
         _log("[ERROR] Server is shutting down.")
         net.set_alive(False)
-    # else: already printed by the [RECV] line above
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +378,7 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
 
 def input_loop(sock: socket.socket) -> None:
     """Read user commands, validate locally, forward to server."""
-    global state, game_type, my_turn, last_board_enc
+    global state, my_name, game_type, my_turn, last_board_enc
 
     _log("[INFO] AL1GN Client ready. Type HELP for commands.")
 
@@ -370,8 +399,10 @@ def input_loop(sock: socket.socket) -> None:
 
             if cmd == 'HELO':
                 if not arg:
-                    _log("[INFO] Usage: HELO <your_name>")
+                    _log("[INFO] Usage: HELO <your_name>  or  HELO <your_name> <token>")
                     continue
+                helo_parts = arg.split(' ', 1)
+                my_name = helo_parts[0]
                 net.send_raw(sock, f"HELO {arg}")
 
             elif cmd == 'QUEUE':
@@ -392,7 +423,6 @@ def input_loop(sock: socket.socket) -> None:
                 if not arg:
                     _log("[INFO] Usage: JOIN <room_code>")
                     continue
-                # game_type inferred later from first 301/302
                 net.send_raw(sock, f"JOIN {arg.upper()}")
 
             elif cmd == 'MOVE':
@@ -467,16 +497,17 @@ def _print_help() -> None:
     _log("""
 [HELP] AL1GN/1.0 Commands
 --------------------------
-  HELO <name>       Register with the server
-  QUEUE TTT|C4      Join auto-matchmaking queue
-  MAKE  TTT|C4      Create a private room (returns a room code)
-  JOIN  <code>      Join a room by its 6-character code
-  MOVE  <pos>       Make a move:
-                      TTT → row,col  (e.g. MOVE 1,2)
-                      C4  → col      (e.g. MOVE 3)
-  REMATCH           Request a rematch after a game ends
-  ACCEPT            Accept opponent's rematch request
-  DECLINE           Decline opponent's rematch request
-  QUIT              Disconnect gracefully
-  HELP              Show this message
+  HELO <name>              Register (first time)
+  HELO <name> <token>      Reconnect using your session token
+  QUEUE TTT|C4             Join auto-matchmaking queue
+  MAKE  TTT|C4             Create a private room (returns a room code)
+  JOIN  <code>             Join a room by its 6-character code
+  MOVE  <pos>              Make a move:
+                             TTT → row,col  (e.g. MOVE 1,2)
+                             C4  → col      (e.g. MOVE 3)
+  REMATCH                  Request a rematch after a game ends
+  ACCEPT                   Accept opponent's rematch request
+  DECLINE                  Decline opponent's rematch request
+  QUIT                     Disconnect gracefully
+  HELP                     Show this message
 --------------------------""")
