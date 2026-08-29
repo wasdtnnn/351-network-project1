@@ -89,7 +89,7 @@ AL1GN เลือกใช้ **TCP (Transmission Control Protocol)** เป็
 
 ### 4.2 ต้องการลำดับการรับข้อมูล (Ordered Delivery)
 
-ลำดับของการเดินมีความสำคัญอย่างยิ่ง เช่น MOVE A → MOVE B ต้องถูกประมวลผลตามลำดับนั้นเสมอ TCP รับประกันว่าข้อมูลถึงปลายทางตามลำดับที่ส่ง (in-order delivery)
+ลำดับของการเดินมีความสำคัญอย่างยิ่ง เช่น MOVE A -> MOVE B ต้องถูกประมวลผลตามลำดับนั้นเสมอ TCP รับประกันว่าข้อมูลถึงปลายทางตามลำดับที่ส่ง (in-order delivery)
 
 ### 4.3 รูปแบบโปรโตคอลเป็น Stream-based
 
@@ -149,7 +149,7 @@ S: 201 Session_created\r\n
 
 C: MOVE 1,2\r\n
 S: 204 Move_accepted\r\n
-S: 301 Your turn X|O|.\r\n   <-- push ไปยังคู่ต่อสู้
+S: 301 Game_turn PlayerTwo X|O|.\r\n   <-- push ไปยังคู่ต่อสู้
 ```
 
 - `<COMMAND>`: ตัวอักษรพิมพ์ใหญ่ 4-7 ตัว
@@ -167,7 +167,7 @@ S: 301 Your turn X|O|.\r\n   <-- push ไปยังคู่ต่อสู้
 เมื่อ client เชื่อมต่อ TCP สำเร็จ เซิร์ฟเวอร์จะส่งข้อความต้อนรับทันที:
 
 ```
-S: 220 Service_ready AL1GN/1.0\r\n
+S: 220 Service_ready\r\n
 ```
 
 การปิดการเชื่อมต่ออย่างปกติ:
@@ -190,19 +190,13 @@ S: 201 Session_created <token>\r\n
 
 Server จะออก **session token** (สตริง hex แบบสุ่ม 16 ตัวอักษร) พร้อมกับการยืนยันการลงทะเบียน Client ควรเก็บ token นี้ไว้เพื่อใช้ reconnect
 
-Token ใช้แก้ปัญหาสองอย่าง:
-1. **Name hijacking** — ป้องกันไม่ให้ผู้อื่น reconnect ด้วยชื่อเดียวกันเพื่อเข้าแทรกเกมที่กำลังดำเนินอยู่
-2. **Orphaned session** — เมื่อ client ตัดการเชื่อมต่อโดยไม่ตั้งใจ เจ้าของที่ถูกต้องสามารถ reconnect ด้วย `HELO <name> <token>` เพื่อดำเนินเกมต่อ
-
-Token ไม่เข้ารหัสเนื้อหาของเกม และไม่ใช่ password ถาวร — มีอายุตลอด session ของ server instance นั้น ๆ
-
 #### 6.2.2 การ Reconnect ด้วย Token
 
 หาก client ตัดการเชื่อมต่อและต้องการกลับเข้าเกมเดิม ให้ส่ง HELO พร้อมทั้งชื่อและ token:
 
 ```
 C: HELO PlayerOne <token>\r\n
-S: 201 Session_restored <board_state>\r\n
+S: 207 Session_restored <board_state>\r\n
 ```
 
 Token ป้องกันไม่ให้ผู้อื่นแอบอ้างชื่อเพื่อเข้าร่วมเกมที่กำลังดำเนินอยู่
@@ -213,7 +207,7 @@ Token ป้องกันไม่ให้ผู้อื่นแอบอ�
 |-----------|---------------|
 | ชื่อนี้มีผู้ใช้งานอยู่แล้ว (live session) | `433 Name_already_taken` |
 | ชื่อตรง แต่ token ไม่ตรง | `460 Bad_token` |
-| ชื่อตรง และ token ตรง | `201 Session_restored ...` |
+| ชื่อตรง และ token ตรง | `207 Session_restored ...` |
 
 ### 6.3 การจับคู่ผู้เล่น (Matchmaking)
 
@@ -235,11 +229,6 @@ S: 301 Game_turn <active_player_name> <board_state>\r\n
 
 `<active_player_name>` คือชื่อของผู้เล่นที่ถึงตาเดิน แต่ละ client เปรียบเทียบชื่อนี้กับชื่อของตัวเองเพื่อทราบว่าถึงตาตัวเองหรือไม่
 
-การส่งรหัส `301` เป็น **broadcast เดียวกันทั้งสองฝ่าย** มีข้อดีดังนี้:
-- **ลดความซ้ำซ้อน** — server ส่งข้อความครั้งเดียวแทนสองครั้งที่ต่างกัน
-- **Client กำหนด logic เอง** — เปรียบเทียบ `<active_player_name>` กับชื่อตนเองที่เก็บไว้
-- **Extensible** — หากมีการเพิ่ม spectator mode ในอนาคต สามารถส่ง broadcast เดิมให้ผู้ชมได้โดยไม่ต้องเปลี่ยนรูปแบบ
-
 #### 6.3.2 Room-based (ใช้รหัสห้อง)
 
 ผู้เล่นที่ต้องการเล่นกับคนที่รู้จัก:
@@ -254,8 +243,8 @@ C: JOIN ABC123\r\n
 S: 203 Joined_room ABC123\r\n
 
 -- server broadcast เหมือนกันทั้งคู่ --
-S→P1: 301 Game_turn <active_player_name> <board_state>\r\n
-S→P2: 301 Game_turn <active_player_name> <board_state>\r\n
+S->P1: 301 Game_turn <active_player_name> <board_state>\r\n
+S->P2: 301 Game_turn <active_player_name> <board_state>\r\n
 ```
 
 ### 6.4 การดำเนินเกม (Game Session)
@@ -277,12 +266,13 @@ S: 204 Move_accepted\r\n
 หลังจากตอบกลับ `204` server จะ **broadcast `301 Game_turn`** ไปยังผู้เล่นทั้งคู่:
 
 ```
-S→both: 301 Game_turn <next_player_name> <board_state>\r\n
+S->both: 301 Game_turn <next_player_name> <board_state>\r\n
 ```
 
 #### 6.4.2 รูปแบบ board_state
 
-board_state คือ string ที่แสดงสถานะกระดานในบรรทัดเดียว โดยใช้ `|` คั่นระหว่างช่อง และ `/` คั่นระหว่างแถว สัญลักษณ์: `X`, `O`, `.` (ว่าง)
+board_state คือ string ที่แสดงสถานะกระดานในบรรทัดเดียว โปรโตคอลเองไม่ได้เป็นผู้กำหนด ขึ้นอยู่กับผู้นำโปรโตคอลไปใช้งาน
+ณ ที่นี้จะยกตัวอย่างโดยใช้ `|` คั่นระหว่างช่อง และ `/` คั่นระหว่างแถว สัญลักษณ์: `X`, `O`, `.` (ว่าง)
 
 ตัวอย่าง TTT หลังเดิน 2 ครั้ง:
 ```
@@ -310,12 +300,12 @@ AL1GN เป็น **generalized protocol** ที่ไม่ผูกติด
 - การเดินที่ server ยอมรับจะได้รับ `204 Move_accepted`
 - การเดินที่ server ปฏิเสธจะได้รับ `451 Invalid_move`
 
-**ว่าอะไรคือ "การเดินที่ถูกต้อง" ไม่ใช่ข้อกำหนดของโปรโตคอล** — เป็นความรับผิดชอบของ board implementation ที่ protocol adopter จัดเตรียมมา ตัวอย่างเช่น:
+**"การเดินที่ถูกต้อง" ไม่ใช่ข้อกำหนดของโปรโตคอล** แต่เป็นความรับผิดชอบของ board implementation ที่ protocol adopter จัดเตรียมมา ตัวอย่างเช่น:
 - Tic-Tac-Toe: ช่องต้องว่าง, อยู่ในกระดาน 3×3
 - Connect4: คอลัมน์ต้องไม่เต็ม, อยู่ใน 0–6
 - เกมอื่น ๆ ในอนาคต: กำหนดกฎเองทั้งหมด
 
-ผลดีคือ server ไม่จำเป็นต้องรู้กฎของเกม — ระบบจัดการเกมเพียงเรียกเมธอดตรวจสอบกฎ และตอบกลับตามผลลัพธ์
+ผลดีคือ server ไม่จำเป็นต้องรู้กฎของเกม ระบบจัดการเกมเพียงเรียกเมธอดตรวจสอบกฎ และตอบกลับตามผลลัพธ์
 
 ```
 C: MOVE 1,1\r\n   <-- ช่องที่มีหมากแล้ว (ตามกฎ TTT)
@@ -351,13 +341,13 @@ S: 206 Pong_received\r\n
 3. หากผู้เล่นที่ตัดการเชื่อมต่อกลับมาเชื่อมต่อและส่ง `HELO <same_name> <token>` ภายใน timeout:
    ```
    C: HELO PlayerOne <token>\r\n
-   S: 201 Session_restored [board_state]\r\n
+   S: 207 Session_restored [board_state]\r\n
    ```
    เกมดำเนินต่อจากจุดที่ค้างไว้
 
 4. หาก timeout หมดอายุก่อนที่จะมีการ reconnect:
    ```
-   S→remaining_player: 306 Game_over_Forfeit\r\n
+   S->remaining_player: 306 Game_over_Forfeit\r\n
    ```
 
 ### 6.7 การขอเล่นซ้ำ (Rematch Negotiation)
@@ -370,21 +360,21 @@ C: REMATCH\r\n
 S: 200 OK\r\n
 
 -- server แจ้งคู่ต่อสู้ --
-S→opponent: 307 Rematch_requested\r\n
+S->opponent: 307 Rematch_requested\r\n
 
 -- คู่ต่อสู้ตอบรับ --
 C: ACCEPT\r\n
 S: 205 Rematch_accepted\r\n
 
 -- server broadcast เกมใหม่ให้ทั้งคู่ --
-S→both: 301 Game_turn <active_player_name> <board_state>\r\n
+S->both: 301 Game_turn <active_player_name> <board_state>\r\n
 ```
 
 หากคู่ต่อสู้ปฏิเสธ:
 ```
 C: DECLINE\r\n
 S: 200 OK\r\n
-S→requester: 309 Rematch_declined\r\n
+S->requester: 309 Rematch_declined\r\n
 ```
 
 ---
@@ -397,18 +387,18 @@ S→requester: 309 Rematch_declined\r\n
 
 | คำสั่ง | ทิศทาง | รูปแบบ | คำอธิบาย |
 |--------|--------|--------|---------|
-| `HELO` | C→S | `HELO <name>\r\n` | ลงทะเบียนครั้งแรก — server ออก token |
-| `HELO` | C→S | `HELO <name> <token>\r\n` | Reconnect — ยืนยันตัวตนด้วย token |
-| `QUEUE` | C→S | `QUEUE <game>\r\n` | เข้าร่วมคิวจับคู่อัตโนมัติ (ตัวอย่าง game: TTT หรือ C4) |
-| `MAKE` | C→S | `MAKE <game>\r\n` | สร้างห้องส่วนตัว server ตอบด้วยรหัสห้อง |
-| `JOIN` | C→S | `JOIN <code>\r\n` | เข้าร่วมห้องด้วยรหัส |
-| `MOVE` | C→S | `MOVE <position>\r\n` | ส่งการเดิน (TTT: `row,col` / C4: `col`) |
-| `PING` | S→C | `PING\r\n` | Heartbeat จาก server |
-| `PONG` | C→S | `PONG\r\n` | ตอบกลับ Heartbeat |
-| `REMATCH` | C→S | `REMATCH\r\n` | ขอเล่นเกมใหม่หลังเกมจบ |
-| `ACCEPT` | C→S | `ACCEPT\r\n` | ยอมรับคำขอ rematch |
-| `DECLINE` | C→S | `DECLINE\r\n` | ปฏิเสธคำขอ rematch |
-| `QUIT` | C→S | `QUIT\r\n` | ตัดการเชื่อมต่ออย่างปกติ |
+| `HELO` | C->S | `HELO <name>\r\n` | ลงทะเบียนครั้งแรก — server ออก token |
+| `HELO` | C->S | `HELO <name> <token>\r\n` | Reconnect — ยืนยันตัวตนด้วย token |
+| `QUEUE` | C->S | `QUEUE <game>\r\n` | เข้าร่วมคิวจับคู่อัตโนมัติ (ตัวอย่าง game: TTT หรือ C4) |
+| `MAKE` | C->S | `MAKE <game>\r\n` | สร้างห้องส่วนตัว server ตอบด้วยรหัสห้อง |
+| `JOIN` | C->S | `JOIN <code>\r\n` | เข้าร่วมห้องด้วยรหัส |
+| `MOVE` | C->S | `MOVE <position>\r\n` | ส่งการเดิน (TTT: `row,col` / C4: `col`) |
+| `PING` | S->C | `PING\r\n` | Heartbeat จาก server |
+| `PONG` | C->S | `PONG\r\n` | ตอบกลับ Heartbeat |
+| `REMATCH` | C->S | `REMATCH\r\n` | ขอเล่นเกมใหม่หลังเกมจบ |
+| `ACCEPT` | C->S | `ACCEPT\r\n` | ยอมรับคำขอ rematch |
+| `DECLINE` | C->S | `DECLINE\r\n` | ปฏิเสธคำขอ rematch |
+| `QUIT` | C->S | `QUIT\r\n` | ตัดการเชื่อมต่ออย่างปกติ |
 
 ### 7.2 รหัสการตอบกลับ (Reply Codes)
 
@@ -425,7 +415,6 @@ S→requester: 309 Rematch_declined\r\n
 |------|--------|---------|
 | 200 | OK | คำสั่งสำเร็จทั่วไป |
 | 201 | Session_created `<token>` | ลงทะเบียนสำเร็จ — token แนบมาด้วย |
-| 201 | Session_restored `<board>` | Reconnect สำเร็จ — board_state แนบมาด้วย |
 | 202 | Room_created `<code>` | สร้างห้องสำเร็จ — รหัสห้องแนบมาด้วย |
 | 203 | Joined_room `<code>` | เข้าร่วมห้องสำเร็จ |
 | 204 | Move_accepted | server ยืนยันการเดิน |
@@ -478,7 +467,7 @@ S→requester: 309 Rematch_declined\r\n
 | คำสั่ง | ตอบกลับเมื่อสำเร็จ | ตอบกลับเมื่อผิดพลาด |
 |--------|-------------------|-------------------|
 | HELO (ใหม่) | 201 + token | 433, 501 |
-| HELO (reconnect) | 201 restored | 433, 460, 501 |
+| HELO (reconnect) | 207 restored | 433, 460, 501 |
 | QUEUE | 300 | 430, 434, 503 |
 | MAKE | 202 | 430, 434, 503 |
 | JOIN | 203 | 430, 431, 432, 503 |
@@ -506,7 +495,7 @@ S→requester: 309 Rematch_declined\r\n
                     +----------+
                     | Connected|
                     +----------+
-                         | HELO → 201
+                         | HELO -> 201
                          v
                     +------------+
                     | Registered |<-----------+
@@ -548,7 +537,7 @@ S→requester: 309 Rematch_declined\r\n
 ### สถานการณ์ที่ 1: การเชื่อมต่อและลงทะเบียน
 
 ```
-S: 220 Service_ready AL1GN/1.0\r\n
+S: 220 Service_ready\r\n
 C: HELO Alice\r\n
 S: 201 Session_created a3f8c2d1e9b047ab\r\n
 ```
@@ -563,8 +552,8 @@ S: 300 Waiting_for_opponent\r\n         S: 300 Waiting_for_opponent\r\n
 -- server จับคู่สำเร็จ — broadcast เดียวกันทั้งคู่ --
 S: 301 Game_turn Alice .,.,./.,.,./.,.,.\r\n
                                         S: 301 Game_turn Alice .,.,./.,.,./.,.,.\r\n
--- Alice เห็นชื่อตัวเอง → ถึงตาฉัน --
--- Bob เห็นชื่อ Alice → รอ --
+-- Alice เห็นชื่อตัวเอง -> ถึงตาฉัน --
+-- Bob เห็นชื่อ Alice -> รอ --
 
 C: MOVE 0,0\r\n
 S: 204 Move_accepted\r\n
@@ -627,7 +616,7 @@ S: 308 Opponent_disconnected Waiting_for_reconnect\r\n
 
 [Bob reconnect และส่ง HELO พร้อม token]
                                         C: HELO Bob b7d4e2f1a0c39815\r\n
-                                        S: 201 Session_restored [board_state]\r\n
+                                        S: 207 Session_restored [board_state]\r\n
 S: 301 Game_turn Alice [board_state]\r\n
                                         S: 301 Game_turn Alice [board_state]\r\n
 [เกมดำเนินต่อ]

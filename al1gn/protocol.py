@@ -27,17 +27,17 @@ TOKEN_LENGTH       = 16    # length of randomly-generated session token (hex cha
 # ---------------------------------------------------------------------------
 R_OK               = "200 OK"
 R_SESSION_CREATED  = "201 Session_created"    # + <token>  appended by server
-R_SESSION_RESTORED = "201 Session_restored"   # + <board_state>  appended by server
 R_ROOM_CREATED     = "202 Room_created"       # + <room_code>  appended by server
 R_JOINED_ROOM      = "203 Joined_room"        # + <room_code>  appended by server
 R_MOVE_ACCEPTED    = "204 Move_accepted"
 R_REMATCH_ACCEPTED = "205 Rematch_accepted"
 R_PONG             = "206 Pong_received"
+R_SESSION_RESTORED = "207 Session_restored"   # + <board_state>  appended by server
 
 # ---------------------------------------------------------------------------
 # 2xx — Connection lifecycle (also success family)
 # ---------------------------------------------------------------------------
-R_SERVICE_READY    = "220 Service_ready AL1GN/1.0"
+R_SERVICE_READY    = "220 Service_ready"
 R_SERVICE_CLOSING  = "221 Service_closing_connection"
 
 # ---------------------------------------------------------------------------

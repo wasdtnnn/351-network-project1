@@ -20,7 +20,7 @@ class Connect4Board:
 
     @staticmethod
     def parse_move(arg: str) -> int:
-        """Parse 'col' → int.  Raises ValueError on bad input."""
+        """Parse 'col' -> int.  Raises ValueError on bad input."""
         return int(arg)
 
     def is_valid_move(self, col: int) -> bool:

@@ -30,46 +30,20 @@ from typing import Optional
 
 import al1gn.session as _session_module
 from al1gn.games import VALID_GAME_TYPES
-from al1gn.protocol import (
-    HOST, PORT, TOKEN_LENGTH,
-    HEARTBEAT_INTERVAL, PING_TIMEOUT, RECONNECT_TIMEOUT,
-    MAX_NAME_LENGTH, ROOM_CODE_LENGTH,
-    # 2xx
-    R_OK, R_SERVICE_READY, R_SERVICE_CLOSING,
-    R_SESSION_CREATED, R_SESSION_RESTORED,
-    R_ROOM_CREATED, R_JOINED_ROOM,
-    R_REMATCH_ACCEPTED, R_PONG,
-    # 3xx
-    R_WAITING, R_GAME_TURN,
-    R_GAME_FORFEIT,
-    R_REMATCH_REQUESTED, R_OPP_DISCONNECTED, R_REMATCH_DECLINED,
-    # 4xx
-    R_BAD_REQUEST, R_NOT_REGISTERED,
-    R_ROOM_NOT_FOUND, R_ROOM_FULL,
-    R_GAME_NOT_STARTED,
-    R_NAME_TAKEN, R_UNKNOWN_GAME,
-    R_BAD_PARAM, R_BAD_SEQUENCE,
-    R_BAD_TOKEN,
-    # 5xx
-    R_SYNTAX_ERROR,
-)
+from al1gn.protocol import *
 from al1gn.session import GameSession, PlayerSession
-
 
 # ---------------------------------------------------------------------------
 # Thread-safe logger
 # ---------------------------------------------------------------------------
 _log_lock = threading.Lock()
 
-
 def _log(msg: str) -> None:
     with _log_lock:
         print(msg)
 
-
 # Wire the same logger into the session layer
 _session_module.set_logger(_log)
-
 
 # ---------------------------------------------------------------------------
 # AL1GNServer
@@ -83,22 +57,21 @@ class AL1GNServer:
     def __init__(self, host: str = HOST, port: int = PORT):
         self.host = host
         self.port = port
-
-        # name → PlayerSession  (canonical registry)
+        # name -> PlayerSession  (canonical registry)
         self._players: dict[str, PlayerSession] = {}
         self._players_lock = threading.Lock()
 
-        # name → token  (persists across disconnects for the lifetime of the server)
+        # name -> token  (persists across disconnects for the lifetime of the server)
         self._tokens: dict[str, str] = {}
         self._tokens_lock = threading.Lock()
 
-        # game_type → [PlayerSession, …]
+        # game_type -> [PlayerSession, …]
         self._queues: dict[str, list[PlayerSession]] = {
             gt: [] for gt in VALID_GAME_TYPES
         }
         self._queues_lock = threading.Lock()
 
-        # room_code → {'game_type': str, 'creator': PlayerSession}
+        # room_code -> {'game_type': str, 'creator': PlayerSession}
         self._rooms: dict[str, dict] = {}
         self._rooms_lock = threading.Lock()
 

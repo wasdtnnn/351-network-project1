@@ -51,8 +51,7 @@ class PlayerSession:
     Represents one connected TCP client.
 
     State machine:
-        Connected → Registered → Waiting → InGame → PostGame
-                                                   ↘ Registered  (after decline/new game)
+        Connected -> Registered -> Waiting -> InGame -> PostGame | Registered  (after decline/new game)
     """
 
     def __init__(self, conn: socket.socket, addr: tuple):

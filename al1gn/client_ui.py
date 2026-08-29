@@ -152,7 +152,7 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
     """Parse one server reply line and update client state / print feedback."""
     global state, my_name, my_token, my_symbol, my_turn, last_board_enc, game_type
 
-    _log(f"[RECV ← SERVER] {line}")
+    _log(f"[RECV <- SERVER] {line}")
 
     parts = line.split(' ', 3)
     code   = parts[0]
@@ -169,21 +169,22 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
 
     elif code == '201':
         state = 'Registered'
-        # phrase is 'Session_created' or 'Session_restored'; data1 is token or board_state
-        if phrase == 'Session_restored' and data1:
-            # data1 is the board_state
-            last_board_enc = data1
-            _log("[INFO] Session restored! Resuming your game:")
+        # data1 is the session token
+        my_token = data1
+        _log(f"[INFO] Registered! Your session token: {my_token}")
+        _log("[INFO] Keep this token — you will need it to reconnect as the same player.")
+        _log("[INFO] Start a game:")
+        _log("[INFO]   QUEUE TTT | C4   — auto-matchmaking")
+        _log("[INFO]   MAKE  TTT | C4   — create private room")
+        _log("[INFO]   JOIN  <code>     — join private room")
+
+    elif code == '207':
+        state = 'Registered'
+        # data1 is the board_state
+        last_board_enc = data1
+        _log("[INFO] Session restored! Resuming your game:")
+        if data1:
             _log(render_board(data1))
-        else:
-            # data1 is the session token
-            my_token = data1
-            _log(f"[INFO] Registered! Your session token: {my_token}")
-            _log("[INFO] Keep this token — you will need it to reconnect as the same player.")
-            _log("[INFO] Start a game:")
-            _log("[INFO]   QUEUE TTT | C4   — auto-matchmaking")
-            _log("[INFO]   MAKE  TTT | C4   — create private room")
-            _log("[INFO]   JOIN  <code>     — join by room code")
 
     elif code == '221':
         _log("[INFO] Server closed the connection.")

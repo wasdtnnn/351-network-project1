@@ -7,7 +7,7 @@ registering it in GAME_REGISTRY below.
 from al1gn.games.ttt import TicTacToeBoard
 from al1gn.games.connect4 import Connect4Board
 
-# Registry: game_type string → board class
+# Registry: game_type string -> board class
 GAME_REGISTRY = {
     'TTT': TicTacToeBoard,
     'C4':  Connect4Board,

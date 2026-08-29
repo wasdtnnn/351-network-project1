@@ -20,7 +20,7 @@ class TicTacToeBoard:
 
     @staticmethod
     def parse_move(arg: str) -> tuple[int, int]:
-        """Parse 'row,col' → (row, col).  Raises ValueError on bad input."""
+        """Parse 'row,col' -> (row, col).  Raises ValueError on bad input."""
         parts = arg.split(',')
         if len(parts) != 2:
             raise ValueError(f"Expected 'row,col', got '{arg}'")

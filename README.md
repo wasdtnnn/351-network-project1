@@ -39,12 +39,12 @@ Connect to a remote server: `python client.py <host> <port>`
 
 **Both clients run these commands in order:**
 ```
-HELO Alice          ← register your name
-QUEUE TTT           ← join matchmaking queue
+HELO Alice          <- register your name
+QUEUE TTT           <- join matchmaking queue
 ```
 Once matched, the first player is prompted to move:
 ```
-MOVE 1,1            ← place at row 1, col 1  (0-indexed)
+MOVE 1,1            <- place at row 1, col 1  (0-indexed)
 ```
 
 ### Connect4 via private room
@@ -52,12 +52,12 @@ MOVE 1,1            ← place at row 1, col 1  (0-indexed)
 **Player 1:**
 ```
 HELO Alice
-MAKE C4             ← server returns a 6-char room code, e.g. "XK9P2M"
+MAKE C4             <- server returns a 6-char room code, e.g. "XK9P2M"
 ```
 **Player 2:**
 ```
 HELO Bob
-JOIN XK9P2M         ← join the room
+JOIN XK9P2M         <- join the room
 ```
 
 ---
@@ -98,8 +98,8 @@ Edit the constants at the top of `server.py`:
 Text-based, SMTP-inspired. Every message ends with `\r\n`.
 
 ```
-Client → Server:   COMMAND [argument]\r\n
-Server → Client:   3xx phrase [data]\r\n
+Client -> Server:   COMMAND [argument]\r\n
+Server -> Client:   3xx phrase [data]\r\n
 ```
 
 **Status code families:**
