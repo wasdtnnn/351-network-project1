@@ -5,6 +5,10 @@ Games supported: **Tic-Tac-Toe (TTT)** and **Connect4 (C4)**.
 
 ---
 
+## Project Submission
+- เอกสารและสไลด์นำเสนอ อยู่ที่ `/FOR_SUBMIT`
+- [วิดีโอนำเสนอ](https://youtu.be/4LtjbfwmX-4)
+
 ## Files
 
 | File | Description |
