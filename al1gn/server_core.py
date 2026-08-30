@@ -396,7 +396,7 @@ class AL1GNServer:
             reply = self._register_player(session, name, token)
             session.send(reply)
             # Reconnect into an active game — push current turn state
-            if reply.startswith('201') and session.state == 'InGame':
+            if reply.startswith('207') and session.state == 'InGame':
                 game = session.game
                 game.opponent_of(session).send("200 Opponent reconnected")
                 game.broadcast_turn()

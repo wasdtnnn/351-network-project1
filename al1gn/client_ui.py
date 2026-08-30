@@ -186,7 +186,7 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
         _log("[INFO]   JOIN  <code>     — join private room")
 
     elif code == '207':
-        state = 'Registered'
+        state = 'InGame'
         # data1 is the board_state
         last_board_enc = data1
         _log("[INFO] Session restored! Resuming your game:")
