@@ -95,6 +95,13 @@ def _render_c4(encoded: str) -> str:
 
 
 def render_board(encoded: str) -> str:
+    global game_type
+    # Auto-detect game type based on row count
+    if encoded.count('/') == 2:
+        game_type = 'TTT'
+    elif encoded.count('/') == 5:
+        game_type = 'C4'
+
     if game_type == 'TTT':
         return _render_ttt(encoded)
     if game_type == 'C4':
@@ -207,6 +214,8 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
         state = 'Waiting'
 
     elif code == '203':
+        if data2:
+            game_type = data2
         _log("[INFO] Joined room. Waiting for game to start…")
         state = 'Waiting'
 
@@ -240,8 +249,7 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
                 _log("[INFO] Game started! You are O (opponent goes first).")
 
         my_turn = it_is_my_turn
-        if board_enc:
-            _log(render_board(board_enc))
+        _log(render_board(board_enc))
 
         if it_is_my_turn:
             _prompt_move()
@@ -252,9 +260,7 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
     # Game over
     # ------------------------------------------------------------------
     elif code == '303':
-        if data2:
-            _log(render_board(data2))
-        elif data1:
+        if data1:
             _log(render_board(data1))
         _log("[INFO] *** YOU WIN! Congratulations! ***")
         state = 'PostGame'
@@ -262,19 +268,16 @@ def handle_server_message(line: str, sock: socket.socket) -> None:
         _prompt_rematch()
 
     elif code == '304':
-        # Could be "304 Game over Loss <board>" or "304 Game over Loss Timeout"
-        board_or_msg = ' '.join(parts[3:]) if len(parts) > 3 else ''
-        if board_or_msg and board_or_msg != 'Timeout':
-            _log(render_board(board_or_msg))
+        if data1 and data1 != 'Timeout':
+            _log(render_board(data1))
         _log("[INFO] *** YOU LOSE. Better luck next time! ***")
         state = 'PostGame'
         my_turn = False
         _prompt_rematch()
 
     elif code == '305':
-        board_or_msg = ' '.join(parts[3:]) if len(parts) > 3 else ''
-        if board_or_msg:
-            _log(render_board(board_or_msg))
+        if data1:
+            _log(render_board(data1))
         _log("[INFO] *** DRAW! ***")
         state = 'PostGame'
         my_turn = False

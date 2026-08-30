@@ -329,7 +329,7 @@ class AL1GNServer:
             game_type = room['game_type']
             del self._rooms[code]
 
-        session.send(f"{R_JOINED_ROOM} {code}")
+        session.send(f"{R_JOINED_ROOM} {code} {game_type}")
         self._start_game(game_type, creator, session)
         return None
 

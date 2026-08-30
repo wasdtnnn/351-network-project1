@@ -240,7 +240,7 @@ S: 202 Room_created ABC123\r\n
 
 -- ผู้เข้าร่วม --
 C: JOIN ABC123\r\n
-S: 203 Joined_room ABC123\r\n
+S: 203 Joined_room ABC123 TTT\r\n
 
 -- server broadcast เหมือนกันทั้งคู่ --
 S->P1: 301 Game_turn <active_player_name> <board_state>\r\n
@@ -416,7 +416,7 @@ S->requester: 309 Rematch_declined\r\n
 | 200 | OK | คำสั่งสำเร็จทั่วไป |
 | 201 | Session_created `<token>` | ลงทะเบียนสำเร็จ — token แนบมาด้วย |
 | 202 | Room_created `<code>` | สร้างห้องสำเร็จ — รหัสห้องแนบมาด้วย |
-| 203 | Joined_room `<code>` | เข้าร่วมห้องสำเร็จ |
+| 203 | Joined_room `<code>` `<game>` | เข้าร่วมห้องสำเร็จ |
 | 204 | Move_accepted | server ยืนยันการเดิน |
 | 205 | Rematch_accepted | เริ่มเกมใหม่ |
 | 206 | Pong_received | ตอบ heartbeat |
@@ -588,7 +588,7 @@ S: 303 Game_over_Win X,X,X/.,O,./.,.,O\r\n
 C: MAKE C4\r\n
 S: 202 Room_created XK9P2M\r\n
                                         C: JOIN XK9P2M\r\n
-                                        S: 203 Joined_room XK9P2M\r\n
+                                        S: 203 Joined_room XK9P2M C4\r\n
 
 S: 301 Game_turn Alice [board]\r\n      S: 301 Game_turn Alice [board]\r\n
 
